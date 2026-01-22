@@ -17,6 +17,7 @@ SEEN_COURSES_FILE = "seen_courses.json"
 CONFIG_FILE = "config.json"
 SECRETS_FILE = "user_secrets.json"
 INPUT_PORT = 8000
+USER_DATA_DIR = "pw_profile"
 
 
 def load_json_file(path, default):
@@ -446,13 +447,21 @@ async def check_grades(context, seen_courses, config, secrets):
 
         search_xpath = get_selector(config, "search_button")
         if search_xpath:
-            await page.wait_for_selector(
-                f"xpath={search_xpath}", state="visible", timeout=10000
-            )
+            try:
+                await page.wait_for_selector(
+                    f"xpath={search_xpath}", state="visible", timeout=10000
+                )
+            except Exception:
+                print("未检测到查询按钮，可能需要手动登录，请在浏览器完成登录。")
+                await page.wait_for_selector(f"xpath={search_xpath}", timeout=0)
             await page.click(f"xpath={search_xpath}")
 
         course_selector = get_selector(config, "course_name_cell")
-        await page.wait_for_selector(course_selector, timeout=15000)
+        try:
+            await page.wait_for_selector(course_selector, timeout=15000)
+        except Exception:
+            print("未检测到成绩表格，可能需要手动登录，请在浏览器完成登录。")
+            await page.wait_for_selector(course_selector, timeout=0)
         courses = await scrape_courses(page, config)
 
         current_courses = {}
@@ -488,9 +497,13 @@ async def run():
     secrets = merge_secrets(stored_secrets, runtime_secrets)
     save_user_secrets(secrets)
 
+    user_data_dir = config.get("user_data_dir", USER_DATA_DIR)
+    user_data_dir = os.path.abspath(user_data_dir)
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False, channel="msedge")
-        context = await browser.new_context()
+        context = await p.chromium.launch_persistent_context(
+            user_data_dir, headless=False, channel="msedge"
+        )
         cookies = build_cookies(config, secrets)
         if cookies:
             await context.add_cookies(cookies)
@@ -505,7 +518,7 @@ async def run():
         except KeyboardInterrupt:
             print("脚本已停止。")
         finally:
-            await browser.close()
+            await context.close()
 
 
 if __name__ == "__main__":
