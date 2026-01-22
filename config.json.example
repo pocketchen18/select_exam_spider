@@ -1,35 +1,46 @@
 {
-    "url": "YOUR_TARGET_URL",
+    "url": "",
     "check_interval_seconds": 1800,
     "cookies": [
         {
             "name": "JSESSIONID",
-            "value": "YOUR_JSESSIONID",
+            "value": "",
             "domain": "jwglxt.gpnu.edu.cn",
             "path": "/"
         },
         {
             "name": "wengine_new_ticket",
-            "value": "YOUR_WENGINE_NEW_TICKET",
+            "value": "",
             "domain": "jwglxt.gpnu.edu.cn",
             "path": "/"
         },
         {
             "name": "route",
-            "value": "YOUR_ROUTE",
+            "value": "",
             "domain": "jwglxt.gpnu.edu.cn",
             "path": "/"
         }
     ],
     "email_config": {
         "smtp_server": "smtp.163.com",
-        "smtp_port": 465,
-        "sender_email": "YOUR_SENDER_EMAIL@163.com",
-        "sender_password": "YOUR_SENDER_PASSWORD",
-        "receiver_email": "YOUR_RECEIVER_EMAIL"
+        "smtp_port": 465
     },
     "xpath": {
         "search_button": "/html/body/div[2]/div/div/div[3]/div[2]/button",
-        "course_name_cell": "td[aria-describedby$='_kcmc']"
+        "course_row": "tr.jqgrow",
+        "course_name_cell": "td[aria-describedby$='_kcmc']",
+        "total_score_cell": "td[aria-describedby$='_cj']",
+        "detail_button": "a[title='查看成绩详情'], a:has-text('查看成绩详情')",
+        "detail_modal": "div[role='dialog']:has-text('查看成绩详情')",
+        "detail_rows": "table tbody tr",
+        "detail_item_cell": "td:nth-child(1)",
+        "detail_ratio_cell": "td:nth-child(2)",
+        "detail_score_cell": "td:nth-child(3)",
+        "detail_close_button": "button:has-text('关闭')"
+    },
+    "login": {
+        "username_input": "#yhm",
+        "password_input": "#mm",
+        "submit_button": "#dl"
     }
 }

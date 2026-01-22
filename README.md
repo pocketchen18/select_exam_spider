@@ -1,93 +1,105 @@
 # 成绩监控自动化脚本说明文档
 
-本脚本基于 Playwright 开发，旨在实现对教务系统成绩的自动监控。当检测到新成绩录入时，会通过 Windows 桌面弹窗和邮件通知用户。
+本脚本基于 Playwright 开发，旨在实现对教务系统成绩的自动监控。当检测到新成绩录入或成绩更新时，会通过 Windows 桌面弹窗和邮件通知用户，并展示总评与分项明细。
 
 ## 1. 环境准备
 
-- **Python 环境**：建议使用虚拟环境（如 `.venv`）
+- **Python 环境**：使用 `uv` 创建虚拟环境 `.venv`
 - **浏览器**：需安装 **Microsoft Edge**
-- **依赖库**：`playwright`, `asyncio`
+- **依赖库**：`playwright`
+
+推荐流程：
+
+```powershell
+uv venv
+uv pip install playwright
+.venv\Scripts\python.exe -m playwright install msedge
+```
 
 ## 2. 核心配置指南
 
-脚本使用 `config.json` 进行统一管理。请按照以下详细步骤获取并填写参数。
+脚本使用 `config.json` 管理固定配置（URL 与选择器）。敏感信息（账号、邮箱授权码、Cookie）通过本地网页输入后保存到 `user_secrets.json`，仅存于本机。
 
-### 2.1 如何获取 网址 (URL) 与 Cookie
+### 2.1 获取成绩查询 URL 与 Cookie
 
-由于教务系统有登录保护，您需要手动从浏览器获取登录后的网址和 Cookie 信息：
+由于教务系统有登录保护，请从浏览器获取登录后的网址和 Cookie：
 
-1. **登录系统**：使用 Edge 浏览器打开教务系统，点击进入“学生成绩查询”页面。
-2. **确认网址**：请确保您当前页面的网址与顶部的地址栏一致（通常为 `https://jwglxt.gpnu.edu.cn/jwglxt/cjcx/cjcx_cxDgXscj.html?gnmkdm=N305005&layout=default`）。
-   - **将该网址完整复制**，填写到 `config.json` 的 `"url"` 字段中。
-     网址是成绩查询界面的网址
-3. **打开开发者工具**：按下键盘上的 **F12** 键（或在页面点击右键选择“检查”）。
-4. **进入网络面板**：在弹出的工具栏顶部点击 **“网络” (Network)** 选项卡。
-5. **刷新页面**：按 **F5** 刷新页面，此时下方会刷新出很多记录。
-6. **找到请求记录**：
-   - 在左侧列表中找到名为 `cjcx_cxDgXscj.html...` 的记录并点击它。
-   - 在右侧出现的面板中，点击 **“标头” (Headers)** 选项卡。
-   - 向下滚动找到 **“请求标头” (Request Headers)** 区域。
-   - 寻找 `Cookie:` 这一行，你会看到类似 `JSESSIONID=...; wengine_new_ticket=...; route=...` 的字符串。
-7. **填写到 config.json**：
-   - 将对应的 `JSESSIONID`、`wengine_new_ticket` 和 `route` 的值分别复制并粘贴到 `config.json` 的 `value` 字段中。
+1. **登录系统**：使用 Edge 浏览器打开教务系统，进入“学生成绩查询”页面。
+2. **确认网址**：复制成绩查询页 URL，填写到 `config.json` 的 `"url"` 字段中。
+3. **获取 Cookie**：打开开发者工具（F12）-> 网络 (Network) -> 刷新页面。
+4. **找到请求记录**：点击 `cjcx_cxDgXscj.html...` 请求，在 Request Headers 中找到 `Cookie`。
+5. **在网页中填写**：脚本启动后会打开 `http://127.0.0.1:8000`，将 `JSESSIONID`、`wengine_new_ticket`、`route` 填入表单。
 
-### 2.2 如何获取网易邮箱授权码
+### 2.2 获取网易邮箱授权码
 
-脚本发送邮件需要专门的“授权码”，而不是您的登录密码：
+发送邮件需要“授权码”，不是登录密码：
 
-1. **登录网页版网易邮箱** (163.com)。
-2. **进入设置**：点击顶部菜单栏的 **“设置”** -> **“POP3/SMTP/IMAP”**。
-3. **开启服务**：确保 “POP3/SMTP服务” 已勾选为 **“开启”**。
-4. **新增授权码**：点击页面下方的 **“新增授权码”** 按钮。
-5. **验证身份**：根据提示发送短信验证码。
-6. **获取并保存**：页面会显示一串 16 位的字母（如 `DQ2YbcQkCM9J4Kgo`），**请立即复制并保存**，它只显示一次。
-7. **填写到 config.json**：将这串字母填写到 `sender_password` 字段。
+1. 登录网页版网易邮箱 (163.com)。
+2. 设置 -> POP3/SMTP/IMAP -> 开启 POP3/SMTP 服务。
+3. 新增授权码并保存。
+4. 脚本启动后在本地网页输入邮箱地址与授权码。
 
-### 2.3 配置文件 config.json 详解
-
-打开 `config.json`，根据以下说明填入信息：
+### 2.3 配置文件 `config.json` 详解
 
 ```json
 {
     "url": "成绩查询的网址",
-    "check_interval_seconds": 1800, // 每隔多少秒检查一次（1800秒=30分钟）
+    "check_interval_seconds": 1800,
     "cookies": [
         {
             "name": "JSESSIONID",
-            "value": "这里填入从浏览器抓取的 JSESSIONID 值",
+            "value": "",
             "domain": "jwglxt.gpnu.edu.cn",
             "path": "/"
         },
-        // ... 其他两个 cookie 同理填入 value ...
+        { "name": "wengine_new_ticket", "value": "", "domain": "jwglxt.gpnu.edu.cn", "path": "/" },
+        { "name": "route", "value": "", "domain": "jwglxt.gpnu.edu.cn", "path": "/" }
     ],
     "email_config": {
         "smtp_server": "smtp.163.com",
-        "smtp_port": 465,
-        "sender_email": "你的发件邮箱@163.com",
-        "sender_password": "这里填入 16 位的授权码",
-        "receiver_email": "接收通知的邮箱@qq.com"
+        "smtp_port": 465
+    },
+    "xpath": {
+        "search_button": "/html/body/div[2]/div/div/div[3]/div[2]/button",
+        "course_row": "tr.jqgrow",
+        "course_name_cell": "td[aria-describedby$='_kcmc']",
+        "total_score_cell": "td[aria-describedby$='_cj']",
+        "detail_button": "a[title='查看成绩详情'], a:has-text('查看成绩详情')",
+        "detail_modal": "div[role='dialog']:has-text('查看成绩详情')",
+        "detail_rows": "table tbody tr",
+        "detail_item_cell": "td:nth-child(1)",
+        "detail_ratio_cell": "td:nth-child(2)",
+        "detail_score_cell": "td:nth-child(3)",
+        "detail_close_button": "button:has-text('关闭')"
+    },
+    "login": {
+        "username_input": "#yhm",
+        "password_input": "#mm",
+        "submit_button": "#dl"
     }
 }
 ```
 
 ## 3. 运行脚本
 
-使用虚拟环境运行：
-
 ```powershell
-python spider.py
+.venv\Scripts\python.exe spider.py
 ```
+
+启动后浏览器会自动打开本地输入页 `http://127.0.0.1:8000`，填写账号、邮箱、Cookie 后脚本开始运行。
 
 ## 4. 功能逻辑
 
-...（略）
+1. **自动登录**：优先注入 Cookie；若输入账号密码则尝试自动登录。
+2. **自动查询**：定位并点击“查询”按钮。
+3. **成绩对比**：获取课程总评与分项明细，对比历史记录，发现变化即提醒。
+4. **即时提醒**：
+   - **桌面弹窗**：显示课程总评与分项成绩。
+   - **邮件提醒**：发送详细成绩明细到指定邮箱。
+5. **定时任务**：脚本持续运行，每隔指定间隔检查一次。
 
-## 5. 常见问题与注意事项
+## 5. 注意事项
 
-- **电脑休眠问题**：若电脑进入“睡眠”或“休眠”状态，脚本将停止运行。若需长期监控，请在 Windows 电源设置中将“使计算机进入睡眠状态”设为“从不”，并将“关闭盖子”设为“不采取任何操作”。
-- **无头模式运行**：如果您不希望每次检查都弹出浏览器窗口，可以将 `spider.py` 中的 `headless=False` 改为 `headless=True`。
-- **垃圾邮件拦截**：网易等邮箱对自动化发信审查较严。若邮件发送失败（报错 554），请检查 `config.json` 中的配置。
-- **Cookie 时效**：Cookie 过期后脚本将无法进入页面。判断方法：
-  1. 脚本控制台会输出 `[错误] Cookie 已过期`。
-  2. 查看项目目录下的 `last_check.png`，如果截图显示的是登录页面，说明已过期。
-  3. 请定期按照 2.1 节重新获取。
+- **Cookie 时效**：Cookie 有有效期，过期需重新抓取并在本地网页更新。
+- **邮箱拦截**：网易等邮箱对自动化发信审查较严，若发送失败可更换发件邮箱。
+- **安全建议**：`user_secrets.json` 仅用于本机保存，已加入 `.gitignore`，请勿提交到仓库。
