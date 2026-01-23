@@ -18,7 +18,7 @@ uv pip install playwright
 
 ## 2. 核心配置指南
 
-脚本使用 `config.json` 管理固定配置（URL 与选择器）。敏感信息（账号、邮箱授权码、Cookie）通过本地网页输入后保存到 `user_secrets.json`，仅存于本机。
+脚本使用 `config.json` 管理固定配置（URL 与选择器）。敏感信息（账号、邮箱授权码、Cookie）通过本地网页输入后保存到 `user_secrets.json`，仅存于本机。登录状态会保存在 `pw_profile`，只需登录一次即可长期复用。
 
 ### 2.1 获取成绩查询 URL 与 Cookie
 
@@ -45,6 +45,7 @@ uv pip install playwright
 {
     "url": "成绩查询的网址",
     "check_interval_seconds": 1800,
+    "user_data_dir": "pw_profile",
     "cookies": [
         {
             "name": "JSESSIONID",
@@ -90,7 +91,7 @@ uv pip install playwright
 
 ## 4. 功能逻辑
 
-1. **自动登录**：优先注入 Cookie；若输入账号密码则尝试自动登录。
+1. **登录复用**：首次运行手动登录一次，登录状态保存在 `pw_profile`。
 2. **自动查询**：定位并点击“查询”按钮。
 3. **成绩对比**：获取课程总评与分项明细，对比历史记录，发现变化即提醒。
 4. **即时提醒**：
@@ -100,6 +101,6 @@ uv pip install playwright
 
 ## 5. 注意事项
 
-- **Cookie 时效**：Cookie 有有效期，过期需重新抓取并在本地网页更新。
+- **登录失效**：若账号被迫重新登录，删除 `pw_profile` 后再运行并手动登录一次。
 - **邮箱拦截**：网易等邮箱对自动化发信审查较严，若发送失败可更换发件邮箱。
-- **安全建议**：`user_secrets.json` 仅用于本机保存，已加入 `.gitignore`，请勿提交到仓库。
+- **安全建议**：`user_secrets.json` 仅用于本机保存，已加入 `.gitignore`，请勿透露给他人。

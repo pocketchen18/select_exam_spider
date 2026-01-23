@@ -1,6 +1,7 @@
 {
     "url": "",
     "check_interval_seconds": 1800,
+    "user_data_dir": "pw_profile",
     "cookies": [
         {
             "name": "JSESSIONID",
