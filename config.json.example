@@ -1,4 +1,6 @@
 {
+    "login_url": "",
+    "grades_url": "",
     "url": "",
     "check_interval_seconds": 1800,
     "user_data_dir": "pw_profile",
