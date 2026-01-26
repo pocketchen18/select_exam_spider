@@ -35,6 +35,7 @@
         "captcha_image": ".index-captcha-2FKeU img",
         "captcha_image_fallback": "div[class^='index-captcha-'] img",
         "captcha_refresh": ".index-codeMask-20jm4",
-        "switch_to_password": ".index-qr_btn-3JpGS.index-sj_btn-11Xsa"
+        "switch_to_password": ".index-qr_btn-3JpGS.index-sj_btn-11Xsa",
+        "switch_account_btn": ""
     }
 }
