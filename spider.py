@@ -1104,7 +1104,7 @@ async def run():
                 print(f"等待 {interval // 60} 分钟后进行下一次检查...")
                 await asyncio.sleep(interval)
         except KeyboardInterrupt:
-            print("脚本已停止。")
+            print("脚本已停止。")#
         finally:
             await context.close()
 
