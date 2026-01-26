@@ -2,29 +2,15 @@
     "url": "",
     "check_interval_seconds": 1800,
     "user_data_dir": "pw_profile",
-    "cookies": [
-        {
-            "name": "JSESSIONID",
-            "value": "",
-            "domain": "jwglxt.gpnu.edu.cn",
-            "path": "/"
-        },
-        {
-            "name": "wengine_new_ticket",
-            "value": "",
-            "domain": "jwglxt.gpnu.edu.cn",
-            "path": "/"
-        },
-        {
-            "name": "route",
-            "value": "",
-            "domain": "jwglxt.gpnu.edu.cn",
-            "path": "/"
-        }
-    ],
     "email_config": {
         "smtp_server": "smtp.163.com",
         "smtp_port": 465
+    },
+    "ocr": {
+        "base_url": "",
+        "model": "",
+        "timeout_seconds": 30,
+        "max_retries": 3
     },
     "xpath": {
         "search_button": "/html/body/div[2]/div/div/div[3]/div[2]/button",
@@ -40,8 +26,13 @@
         "detail_close_button": "button:has-text('关闭')"
     },
     "login": {
-        "username_input": "#yhm",
-        "password_input": "#mm",
-        "submit_button": "#dl"
+        "username_input": "#userName",
+        "password_input": "#password",
+        "submit_button": "button.index-submit-1UOCo.index-logining-HO9Db",
+        "captcha_input": "#captcha",
+        "captcha_image": ".index-captcha-2FKeU img",
+        "captcha_image_fallback": "div[class^='index-captcha-'] img",
+        "captcha_refresh": ".index-codeMask-20jm4",
+        "switch_to_password": ".index-qr_btn-3JpGS.index-sj_btn-11Xsa"
     }
 }

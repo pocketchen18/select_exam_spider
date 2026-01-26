@@ -1,9 +1,12 @@
 import asyncio
+import base64
 import ctypes
 import json
 import os
+import re
 import smtplib
 import threading
+import urllib.request
 import webbrowser
 from datetime import datetime
 from email.header import Header
@@ -76,9 +79,9 @@ def pick_value(*values):
 
 
 def render_form_html(defaults):
-    cookies = defaults.get("cookies", {})
     email = defaults.get("email", {})
     login = defaults.get("login", {})
+    ocr = defaults.get("ocr", {})
     url_value = defaults.get("url", "")
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -105,13 +108,6 @@ def render_form_html(defaults):
         <legend>教务系统</legend>
         <label>成绩查询 URL</label>
         <input name="url" value="{url_value}" placeholder="成绩查询页面 URL" />
-        <label>JSESSIONID</label>
-        <input name="cookie_jsessionid" value="{cookies.get("JSESSIONID", "")}" />
-        <label>wengine_new_ticket</label>
-        <input name="cookie_wengine" value="{cookies.get("wengine_new_ticket", "")}" />
-        <label>route</label>
-        <input name="cookie_route" value="{cookies.get("route", "")}" />
-        <div class="hint">建议填写 Cookie 以免频繁登录。</div>
         <label>学号/账号（可选）</label>
         <input name="login_username" value="{login.get("username", "")}" />
         <label>登录密码（可选）</label>
@@ -126,6 +122,16 @@ def render_form_html(defaults):
         <label>收件邮箱</label>
         <input name="receiver_email" value="{email.get("receiver_email", "")}" />
       </fieldset>
+      <fieldset>
+        <legend>验证码识别（OCR）</legend>
+        <label>base_url</label>
+        <input name="ocr_base_url" value="{ocr.get("base_url", "")}" placeholder="https://api.openai.com/v1" />
+        <label>model</label>
+        <input name="ocr_model" value="{ocr.get("model", "")}" placeholder="gpt-4o-mini" />
+        <label>api_key</label>
+        <input name="ocr_api_key" type="password" value="{ocr.get("api_key", "")}" />
+        <div class="hint">要求 OpenAI 兼容接口（/v1/chat/completions）。</div>
+      </fieldset>
       <button type="submit">保存并开始监控</button>
     </form>
   </div>
@@ -136,22 +142,19 @@ def render_form_html(defaults):
 def collect_runtime_secrets(config, stored_secrets):
     defaults = {
         "url": pick_value(stored_secrets.get("url"), config.get("url", "")),
-        "cookies": {
-            "JSESSIONID": pick_value(
-                stored_secrets.get("cookies", {}).get("JSESSIONID"),
-                config.get("cookies", [{}])[0].get("value", ""),
-            ),
-            "wengine_new_ticket": pick_value(
-                stored_secrets.get("cookies", {}).get("wengine_new_ticket"),
-                config.get("cookies", [{}, {}])[1].get("value", ""),
-            ),
-            "route": pick_value(
-                stored_secrets.get("cookies", {}).get("route"),
-                config.get("cookies", [{}, {}, {}])[2].get("value", ""),
-            ),
-        },
         "login": stored_secrets.get("login", {}),
         "email": stored_secrets.get("email", {}),
+        "ocr": {
+            "base_url": pick_value(
+                stored_secrets.get("ocr", {}).get("base_url"),
+                config.get("ocr", {}).get("base_url", ""),
+            ),
+            "model": pick_value(
+                stored_secrets.get("ocr", {}).get("model"),
+                config.get("ocr", {}).get("model", ""),
+            ),
+            "api_key": stored_secrets.get("ocr", {}).get("api_key", ""),
+        },
     }
 
     result = {}
@@ -180,11 +183,6 @@ def collect_runtime_secrets(config, stored_secrets):
             result.update(
                 {
                     "url": fields.get("url", ""),
-                    "cookies": {
-                        "JSESSIONID": fields.get("cookie_jsessionid", ""),
-                        "wengine_new_ticket": fields.get("cookie_wengine", ""),
-                        "route": fields.get("cookie_route", ""),
-                    },
                     "login": {
                         "username": fields.get("login_username", ""),
                         "password": fields.get("login_password", ""),
@@ -193,6 +191,11 @@ def collect_runtime_secrets(config, stored_secrets):
                         "sender_email": fields.get("sender_email", ""),
                         "sender_password": fields.get("sender_password", ""),
                         "receiver_email": fields.get("receiver_email", ""),
+                    },
+                    "ocr": {
+                        "base_url": fields.get("ocr_base_url", ""),
+                        "model": fields.get("ocr_model", ""),
+                        "api_key": fields.get("ocr_api_key", ""),
                     },
                 }
             )
@@ -218,30 +221,18 @@ def collect_runtime_secrets(config, stored_secrets):
 
 def merge_secrets(base, updates):
     merged = json.loads(json.dumps(base or {}))
-    for key in ("url", "cookies", "login", "email"):
+    for key in ("url", "login", "email", "ocr"):
         if key not in merged:
             merged[key] = {}
     if updates.get("url"):
         merged["url"] = updates["url"]
-    for section in ("cookies", "login", "email"):
+    for section in ("login", "email", "ocr"):
         merged_section = merged.get(section, {})
         for field_key, field_value in updates.get(section, {}).items():
             if field_value:
                 merged_section[field_key] = field_value
         merged[section] = merged_section
     return merged
-
-
-def build_cookies(config, secrets):
-    override = secrets.get("cookies", {})
-    cookies = []
-    for cookie in config.get("cookies", []):
-        value = pick_value(
-            override.get(cookie.get("name", "")), cookie.get("value", "")
-        )
-        if value:
-            cookies.append({**cookie, "value": value})
-    return cookies
 
 
 def build_email_config(config, secrets):
@@ -251,6 +242,181 @@ def build_email_config(config, secrets):
     email_config["sender_password"] = pick_value(email_override.get("sender_password"))
     email_config["receiver_email"] = pick_value(email_override.get("receiver_email"))
     return email_config
+
+
+def build_ocr_config(config, secrets):
+    config_ocr = config.get("ocr", {})
+    secrets_ocr = secrets.get("ocr", {})
+    return {
+        "base_url": pick_value(
+            secrets_ocr.get("base_url"), config_ocr.get("base_url", "")
+        ),
+        "model": pick_value(secrets_ocr.get("model"), config_ocr.get("model", "")),
+        "api_key": pick_value(secrets_ocr.get("api_key")),
+        "timeout_seconds": config_ocr.get("timeout_seconds", 30),
+        "max_retries": config_ocr.get("max_retries", 3),
+    }
+
+
+def build_openai_endpoint(base_url):
+    if not base_url:
+        return ""
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
+
+
+def is_ocr_configured(ocr_config):
+    return bool(
+        ocr_config.get("base_url")
+        and ocr_config.get("model")
+        and ocr_config.get("api_key")
+    )
+
+
+def request_ocr_text(ocr_config, image_base64):
+    if not is_ocr_configured(ocr_config):
+        return ""
+    endpoint = build_openai_endpoint(ocr_config["base_url"])
+    if not endpoint:
+        return ""
+    prompt = "请识别图片中的算式，只输出算式，例如 12+8，不要输出其他文字。"
+    payload = {
+        "model": ocr_config["model"],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+                    },
+                ],
+            }
+        ],
+        "temperature": 0,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {ocr_config['api_key']}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(
+            request, timeout=ocr_config["timeout_seconds"]
+        ) as response:
+            response_text = response.read().decode("utf-8")
+    except Exception as exc:
+        print(f"OCR 请求失败: {exc}")
+        return ""
+    try:
+        data = json.loads(response_text)
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    except Exception as exc:
+        print(f"OCR 响应解析失败: {exc}")
+        return ""
+
+
+def normalize_ocr_text(text):
+    return (
+        text.replace(" ", "")
+        .replace("\n", "")
+        .replace("×", "*")
+        .replace("x", "*")
+        .replace("X", "*")
+        .replace("÷", "/")
+    )
+
+
+def format_math_result(value):
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if abs(value - round(value)) < 1e-9:
+            return str(int(round(value)))
+        return str(round(value, 4)).rstrip("0").rstrip(".")
+    return str(value)
+
+
+def solve_math_from_text(text):
+    if not text:
+        return ""
+    normalized = normalize_ocr_text(text)
+    match = re.search(r"(\d+)([+\-*/])(\d+)", normalized)
+    if match:
+        left = int(match.group(1))
+        op = match.group(2)
+        right = int(match.group(3))
+        if op == "+":
+            return format_math_result(left + right)
+        if op == "-":
+            return format_math_result(left - right)
+        if op == "*":
+            return format_math_result(left * right)
+        if op == "/":
+            if right == 0:
+                return ""
+            return format_math_result(left / right)
+    if re.fullmatch(r"\d+(\.\d+)?", normalized):
+        return normalized
+    return ""
+
+
+async def call_ocr_text(ocr_config, image_base64):
+    return await asyncio.to_thread(request_ocr_text, ocr_config, image_base64)
+
+
+async def extract_captcha_base64(page, image_selector, fallback_selector):
+    selector = image_selector or ""
+    locator = page.locator(selector) if selector else page.locator(fallback_selector)
+    if await locator.count() == 0 and fallback_selector:
+        locator = page.locator(fallback_selector)
+    if await locator.count() == 0:
+        return ""
+    element = locator.first
+    src = await element.get_attribute("src")
+    if src and src.startswith("data:image"):
+        return src.split(",", 1)[1]
+    try:
+        data = await element.screenshot(type="png")
+        return base64.b64encode(data).decode("utf-8")
+    except Exception as exc:
+        print(f"验证码截图失败: {exc}")
+        return ""
+
+
+async def refresh_captcha(page, refresh_selector, image_selector, fallback_selector):
+    if refresh_selector:
+        refresh = page.locator(refresh_selector)
+        if await refresh.count() > 0:
+            await refresh.first.click()
+            return
+    selector = image_selector or fallback_selector
+    if selector:
+        image = page.locator(selector)
+        if await image.count() > 0:
+            await image.first.click()
+
+
+async def solve_captcha(page, config, secrets, image_selector, fallback_selector):
+    ocr_config = build_ocr_config(config, secrets)
+    if not is_ocr_configured(ocr_config):
+        print("OCR 配置不完整，无法自动识别验证码。")
+        return ""
+    image_base64 = await extract_captcha_base64(page, image_selector, fallback_selector)
+    if not image_base64:
+        return ""
+    ocr_text = await call_ocr_text(ocr_config, image_base64)
+    answer = solve_math_from_text(ocr_text)
+    if not answer:
+        print(f"OCR 未能解析验证码算式: {ocr_text}")
+    return answer
 
 
 def format_component(component):
@@ -352,23 +518,154 @@ def get_runtime_url(config, secrets):
     return pick_value(secrets.get("url"), config.get("url", ""))
 
 
+LOGIN_OK = "ok"
+LOGIN_MANUAL = "manual"
+LOGIN_FAILED = "failed"
+
+
+async def wait_for_login_success(page, config, timeout=10000):
+    selectors = []
+    search_xpath = get_selector(config, "search_button")
+    if search_xpath:
+        selectors.append(f"xpath={search_xpath}")
+    course_selector = get_selector(config, "course_name_cell")
+    if course_selector:
+        selectors.append(course_selector)
+    for selector in selectors:
+        try:
+            await page.wait_for_selector(selector, timeout=timeout)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+async def wait_for_login_success_forever(page, config):
+    selectors = []
+    search_xpath = get_selector(config, "search_button")
+    if search_xpath:
+        selectors.append(f"xpath={search_xpath}")
+    course_selector = get_selector(config, "course_name_cell")
+    if course_selector:
+        selectors.append(course_selector)
+    if not selectors:
+        return False
+    tasks = [
+        asyncio.create_task(page.wait_for_selector(sel, timeout=0)) for sel in selectors
+    ]
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        return len(done) > 0
+    except Exception as exc:
+        print(f"等待登录完成时发生错误: {exc}")
+        return False
+
+
 async def attempt_login(page, config, secrets):
-    if not should_attempt_login(secrets):
-        return
     username_selector = get_login_selector(config, "username_input")
     password_selector = get_login_selector(config, "password_input")
     submit_selector = get_login_selector(config, "submit_button")
-    if not username_selector or not password_selector or not submit_selector:
-        return
+    switch_selector = get_login_selector(config, "switch_to_password")
+    if not username_selector or not password_selector:
+        return LOGIN_FAILED
+
     username_field = await page.query_selector(username_selector)
     password_field = await page.query_selector(password_selector)
-    if not username_field or not password_field:
-        return
+
+    if (username_field is None or password_field is None) and switch_selector:
+        switch_button = page.locator(switch_selector)
+        if await switch_button.count() > 0:
+            await switch_button.first.click()
+            username_locator = page.locator(username_selector)
+            password_locator = page.locator(password_selector)
+            try:
+                await asyncio.gather(
+                    username_locator.first.wait_for(state="visible", timeout=1000),
+                    password_locator.first.wait_for(state="visible", timeout=1000),
+                )
+            except Exception:
+                pass
+            username_field = await page.query_selector(username_selector)
+            password_field = await page.query_selector(password_selector)
+
+    username_visible = False
+    password_visible = False
+    if username_field:
+        try:
+            username_visible = await page.locator(username_selector).first.is_visible()
+        except Exception:
+            username_visible = False
+    if password_field:
+        try:
+            password_visible = await page.locator(password_selector).first.is_visible()
+        except Exception:
+            password_visible = False
+
+    if not should_attempt_login(secrets):
+        if username_visible and password_visible:
+            return LOGIN_MANUAL
+        return LOGIN_OK
+
+    if not username_visible or not password_visible:
+        return LOGIN_MANUAL
+
+    captcha_input_selector = get_login_selector(config, "captcha_input")
+    captcha_image_selector = get_login_selector(config, "captcha_image")
+    captcha_fallback_selector = get_login_selector(config, "captcha_image_fallback")
+    captcha_refresh_selector = get_login_selector(config, "captcha_refresh")
+
     login = secrets.get("login", {})
-    await page.fill(username_selector, login.get("username", ""))
-    await page.fill(password_selector, login.get("password", ""))
-    await page.click(submit_selector)
-    await page.wait_for_load_state("networkidle")
+    ocr_config = build_ocr_config(config, secrets)
+    max_retries = max(1, int(ocr_config.get("max_retries", 3)))
+
+    for attempt in range(max_retries):
+        await page.fill(username_selector, login.get("username", ""))
+        await page.fill(password_selector, login.get("password", ""))
+
+        captcha_required = False
+        if captcha_input_selector:
+            captcha_input = page.locator(captcha_input_selector)
+            if (
+                await captcha_input.count() > 0
+                and await captcha_input.first.is_visible()
+            ):
+                captcha_required = True
+                captcha_answer = await solve_captcha(
+                    page,
+                    config,
+                    secrets,
+                    captcha_image_selector,
+                    captcha_fallback_selector,
+                )
+                if captcha_answer:
+                    await captcha_input.first.fill(captcha_answer)
+                else:
+                    return LOGIN_MANUAL
+
+        if captcha_required:
+            await page.locator(captcha_input_selector).first.press("Enter")
+        else:
+            await page.locator(password_selector).first.press("Enter")
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=1500)
+        except Exception:
+            pass
+
+        if await wait_for_login_success(page, config, timeout=8000):
+            return LOGIN_OK
+        if not captcha_required:
+            return LOGIN_FAILED
+        await refresh_captcha(
+            page,
+            captcha_refresh_selector,
+            captcha_image_selector,
+            captcha_fallback_selector,
+        )
+
+    print("验证码识别失败，请手动输入。")
+    return LOGIN_MANUAL
 
 
 async def fetch_detail_components(page, row, config):
@@ -443,7 +740,41 @@ async def check_grades(context, seen_courses, config, secrets):
 
     try:
         await page.goto(url, wait_until="networkidle")
-        await attempt_login(page, config, secrets)
+        login_result = LOGIN_OK
+        username_selector = get_login_selector(config, "username_input")
+        password_selector = get_login_selector(config, "password_input")
+        switch_selector = get_login_selector(config, "switch_to_password")
+        login_form_visible = False
+        if username_selector and password_selector:
+            try:
+                login_form_visible = (
+                    await page.locator(username_selector).first.is_visible()
+                    or await page.locator(password_selector).first.is_visible()
+                )
+            except Exception:
+                login_form_visible = False
+        if not login_form_visible and switch_selector:
+            try:
+                login_form_visible = await page.locator(
+                    switch_selector
+                ).first.is_visible()
+            except Exception:
+                login_form_visible = False
+
+        if login_form_visible:
+            login_result = await attempt_login(page, config, secrets)
+        else:
+            logged_in = await wait_for_login_success(page, config, timeout=300)
+            if not logged_in:
+                login_result = await attempt_login(page, config, secrets)
+
+        if login_result != LOGIN_OK:
+            print("请在浏览器完成登录/验证码输入，脚本将等待登录成功后继续。")
+
+        if not await wait_for_login_success(page, config, timeout=3000):
+            if not await wait_for_login_success_forever(page, config):
+                print("登录等待失败，可能页面已关闭。")
+                return
 
         search_xpath = get_selector(config, "search_button")
         if search_xpath:
@@ -504,9 +835,6 @@ async def run():
         context = await p.chromium.launch_persistent_context(
             user_data_dir, headless=False, channel="msedge"
         )
-        cookies = build_cookies(config, secrets)
-        if cookies:
-            await context.add_cookies(cookies)
 
         seen_courses = load_seen_courses()
         try:
