@@ -82,7 +82,8 @@ def render_form_html(defaults):
     email = defaults.get("email", {})
     login = defaults.get("login", {})
     ocr = defaults.get("ocr", {})
-    url_value = defaults.get("url", "")
+    login_url = defaults.get("login_url", "")
+    grades_url = defaults.get("grades_url", "")
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -106,11 +107,14 @@ def render_form_html(defaults):
     <form method="post" action="/submit">
       <fieldset>
         <legend>教务系统</legend>
+        <label>登录界面 URL</label>
+        <input name="login_url" value="{login_url}" placeholder="统一认证/登录入口 URL" />
         <label>成绩查询 URL</label>
-        <input name="url" value="{url_value}" placeholder="成绩查询页面 URL" />
-        <label>学号/账号（可选）</label>
+        <input name="grades_url" value="{grades_url}" placeholder="成绩查询页面 URL" />
+
+        <label>学号/账号</label>
         <input name="login_username" value="{login.get("username", "")}" />
-        <label>登录密码（可选）</label>
+        <label>登录密码</label>
         <input name="login_password" type="password" value="{login.get("password", "")}" />
       </fieldset>
       <fieldset>
@@ -140,8 +144,14 @@ def render_form_html(defaults):
 
 
 def collect_runtime_secrets(config, stored_secrets):
+    legacy_url = pick_value(stored_secrets.get("url"), config.get("url", ""))
     defaults = {
-        "url": pick_value(stored_secrets.get("url"), config.get("url", "")),
+        "login_url": pick_value(
+            stored_secrets.get("login_url"), config.get("login_url", ""), legacy_url
+        ),
+        "grades_url": pick_value(
+            stored_secrets.get("grades_url"), config.get("grades_url", ""), legacy_url
+        ),
         "login": stored_secrets.get("login", {}),
         "email": stored_secrets.get("email", {}),
         "ocr": {
@@ -182,7 +192,8 @@ def collect_runtime_secrets(config, stored_secrets):
             fields = {key: value[0].strip() for key, value in parse_qs(body).items()}
             result.update(
                 {
-                    "url": fields.get("url", ""),
+                    "login_url": fields.get("login_url", ""),
+                    "grades_url": fields.get("grades_url", ""),
                     "login": {
                         "username": fields.get("login_username", ""),
                         "password": fields.get("login_password", ""),
@@ -221,11 +232,22 @@ def collect_runtime_secrets(config, stored_secrets):
 
 def merge_secrets(base, updates):
     merged = json.loads(json.dumps(base or {}))
-    for key in ("url", "login", "email", "ocr"):
+    for key in (
+        "url",
+        "login_url",
+        "grades_url",
+        "login",
+        "email",
+        "ocr",
+    ):
         if key not in merged:
             merged[key] = {}
     if updates.get("url"):
         merged["url"] = updates["url"]
+    if updates.get("login_url"):
+        merged["login_url"] = updates["login_url"]
+    if updates.get("grades_url"):
+        merged["grades_url"] = updates["grades_url"]
     for section in ("login", "email", "ocr"):
         merged_section = merged.get(section, {})
         for field_key, field_value in updates.get(section, {}).items():
@@ -514,8 +536,15 @@ def should_attempt_login(secrets):
     return bool(login.get("username") and login.get("password"))
 
 
-def get_runtime_url(config, secrets):
-    return pick_value(secrets.get("url"), config.get("url", ""))
+def get_runtime_urls(config, secrets):
+    legacy_url = pick_value(secrets.get("url"), config.get("url", ""))
+    login_url = pick_value(
+        secrets.get("login_url"), config.get("login_url", ""), legacy_url
+    )
+    grades_url = pick_value(
+        secrets.get("grades_url"), config.get("grades_url", ""), legacy_url
+    )
+    return login_url, grades_url
 
 
 LOGIN_OK = "ok"
@@ -560,6 +589,75 @@ async def wait_for_login_success_forever(page, config):
         return len(done) > 0
     except Exception as exc:
         print(f"等待登录完成时发生错误: {exc}")
+        return False
+
+
+async def is_login_form_visible(page, config):
+    selectors = [
+        get_login_selector(config, "switch_to_password"),
+        get_login_selector(config, "username_input"),
+        get_login_selector(config, "password_input"),
+    ]
+    for selector in selectors:
+        if not selector:
+            continue
+        locator = page.locator(selector)
+        if await locator.count() == 0:
+            continue
+        try:
+            if await locator.first.is_visible():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def wait_for_login_exit(page, config, timeout=15000):
+    deadline = asyncio.get_running_loop().time() + timeout / 1000
+    while True:
+        if not await is_login_form_visible(page, config):
+            return True
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        await page.wait_for_timeout(200)
+
+
+async def wait_for_login_exit_forever(page, config):
+    while True:
+        if not await is_login_form_visible(page, config):
+            return True
+        await page.wait_for_timeout(200)
+
+
+async def wait_for_login_form_ready(page, config, timeout=1000):
+    selectors = [
+        get_login_selector(config, "switch_to_password"),
+        get_login_selector(config, "username_input"),
+        get_login_selector(config, "password_input"),
+    ]
+    selectors = [selector for selector in selectors if selector]
+    for selector in selectors:
+        locator = page.locator(selector)
+        if await locator.count() > 0:
+            try:
+                if await locator.first.is_visible():
+                    return True
+            except Exception:
+                pass
+    tasks = [
+        asyncio.create_task(
+            page.locator(selector).first.wait_for(state="visible", timeout=timeout)
+        )
+        for selector in selectors
+    ]
+    if not tasks:
+        return False
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+        return len(done) > 0
+    except Exception:
         return False
 
 
@@ -735,46 +833,45 @@ async def scrape_courses(page, config):
 
 async def check_grades(context, seen_courses, config, secrets):
     page = await context.new_page()
-    url = get_runtime_url(config, secrets)
+    login_url, grades_url = get_runtime_urls(config, secrets)
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 正在检查成绩...")
 
     try:
-        await page.goto(url, wait_until="networkidle")
+        await page.goto(login_url, wait_until="domcontentloaded")
+        await wait_for_login_form_ready(page, config, timeout=800)
         login_result = LOGIN_OK
-        username_selector = get_login_selector(config, "username_input")
-        password_selector = get_login_selector(config, "password_input")
-        switch_selector = get_login_selector(config, "switch_to_password")
-        login_form_visible = False
-        if username_selector and password_selector:
-            try:
-                login_form_visible = (
-                    await page.locator(username_selector).first.is_visible()
-                    or await page.locator(password_selector).first.is_visible()
-                )
-            except Exception:
-                login_form_visible = False
-        if not login_form_visible and switch_selector:
-            try:
-                login_form_visible = await page.locator(
-                    switch_selector
-                ).first.is_visible()
-            except Exception:
-                login_form_visible = False
-
+        login_form_visible = await is_login_form_visible(page, config)
         if login_form_visible:
             login_result = await attempt_login(page, config, secrets)
         else:
-            logged_in = await wait_for_login_success(page, config, timeout=300)
+            logged_in = await wait_for_login_success(page, config, timeout=200)
             if not logged_in:
                 login_result = await attempt_login(page, config, secrets)
 
         if login_result != LOGIN_OK:
-            print("请在浏览器完成登录/验证码输入，脚本将等待登录成功后继续。")
+            print(
+                "请在浏览器完成登录（包括点击CAS统一认证按钮），脚本将等待登录成功后继续。"
+            )
 
-        if not await wait_for_login_success(page, config, timeout=3000):
-            if not await wait_for_login_success_forever(page, config):
-                print("登录等待失败，可能页面已关闭。")
-                return
+        if not await wait_for_login_exit(page, config, timeout=15000):
+            await wait_for_login_exit_forever(page, config)
+
+        # 等待页面加载完成后再跳转
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+
+        await page.goto(grades_url, wait_until="domcontentloaded")
+        if await is_login_form_visible(page, config):
+            login_result = await attempt_login(page, config, secrets)
+            if login_result != LOGIN_OK:
+                print(
+                    "请在浏览器完成登录（包括点击CAS统一认证按钮），脚本将等待登录成功后继续。"
+                )
+            if not await wait_for_login_exit(page, config, timeout=15000):
+                await wait_for_login_exit_forever(page, config)
+            await page.goto(grades_url, wait_until="domcontentloaded")
 
         search_xpath = get_selector(config, "search_button")
         if search_xpath:
