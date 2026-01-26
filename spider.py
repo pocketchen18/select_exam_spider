@@ -642,53 +642,86 @@ async def get_login_target(page, config):
 async def check_and_handle_cas_jump(page):
     """检测并处理 CAS 统一身份认证跳转"""
     try:
+        # 增加一个小的延迟，确保 frame 加载
+        await asyncio.sleep(0.5)
+        
         # 检查所有 frame 中的内容
         all_frames = page.frames
         cas_found = False
+        target_frame = None
+        
         for frame in all_frames:
             try:
                 content = await frame.content()
                 if "CAS统一身份认证登录" in content or "应用认证平台" in content:
                     cas_found = True
+                    target_frame = frame
                     break
             except Exception:
                 continue
 
         if cas_found:
-            # 如果当前 URL 已经是登录成功后的 URL 或者是教务系统主页，就不再跳转
             current_url = page.url
-            print(f"检测到 CAS 状态，当前 URL: {current_url}")
+            print(f"检测到 CAS 状态 (URL: {current_url})")
+            
+            # 如果当前 URL 已经是登录成功后的 URL 或者是教务系统主页，就不再跳转
             if "jwglxt.gpnu.edu.cn" in current_url and "cas_login=true" not in current_url:
-                # 检查是否已经登录成功
                 content = await page.content()
                 if "广东技术师范大学教务系统" in content:
                     print("已经在教务系统主页，无需再次跳转。")
                     return "SUCCESS"
 
-            print("检测到 CAS 统一身份认证提示，正在执行跳转授权...")
-            # 使用更稳妥的方式跳转，并增加重试逻辑
+            print("正在执行 CAS 跳转授权...")
+            
+            # 记录跳转前的状态
+            auth_url = "https://webauth.gpnu.edu.cn/wengine-auth/login?cas_login=true"
+            
             try:
-                await page.goto(
-                    "https://webauth.gpnu.edu.cn/wengine-auth/login?cas_login=true",
-                    wait_until="networkidle",
-                    timeout=15000,
-                )
+                # 尝试跳转，如果已经在跳转中，goto 可能会抛出错误，这里捕获它
+                await page.goto(auth_url, wait_until="networkidle", timeout=15000)
             except Exception as e:
-                print(f"跳转 CAS 授权页面超时或失败: {e}，尝试 domcontentloaded 模式")
-                await page.goto(
-                    "https://webauth.gpnu.edu.cn/wengine-auth/login?cas_login=true",
-                    wait_until="domcontentloaded",
-                    timeout=10000,
-                )
+                if "navigation" in str(e).lower():
+                    print(f"跳转过程中检测到并发导航: {e}，尝试等待加载完成")
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=10000)
+                    except:
+                        pass
+                else:
+                    print(f"跳转 CAS 授权页面失败: {e}，尝试 domcontentloaded 模式")
+                    try:
+                        await page.goto(auth_url, wait_until="domcontentloaded", timeout=10000)
+                    except Exception as e2:
+                        print(f"二次尝试跳转也失败: {e2}")
 
-            await asyncio.sleep(2)  # 给更多时间加载
-
-            # 检查是否跳转到了教务系统主页
-            new_content = await page.content()
-            if "广东技术师范大学教务系统" in new_content:
-                print("检测到“广东技术师范大学教务系统”文本，登录成功！")
-                return "SUCCESS"
-            return True
+            # 轮询检查是否到达成功页面，最多等待 10 秒
+            print("正在验证登录成功状态...")
+            for _ in range(20): # 0.5s * 20 = 10s
+                await asyncio.sleep(0.5)
+                try:
+                    content = await page.content()
+                    if "广东技术师范大学教务系统" in content:
+                        print("检测到“广东技术师范大学教务系统”文本，登录成功！")
+                        return "SUCCESS"
+                    
+                    # 检查是否还在 CAS 页面
+                    all_frames = page.frames
+                    still_on_cas = False
+                    for frame in all_frames:
+                        try:
+                            f_content = await frame.content()
+                            if "CAS统一身份认证登录" in f_content or "应用认证平台" in f_content:
+                                still_on_cas = True
+                                break
+                        except:
+                            continue
+                    
+                    if not still_on_cas and "jwglxt.gpnu.edu.cn" in page.url:
+                        # 虽然没看到文本，但 URL 对了，可能还在加载
+                        continue
+                except:
+                    continue
+            
+            return True # 返回 True 表示处理过 CAS，但没确认最终成功，让外层重试
     except Exception as exc:
         print(f"检查 CAS 文本或跳转时出错: {exc}")
     return False
@@ -986,7 +1019,10 @@ async def check_grades(context, seen_courses, config, secrets):
         
         # 再次检查是否需要登录（有时跳转到成绩页会重新要求认证）
         cas_status = await check_and_handle_cas_jump(page)
-        if cas_status:
+        if cas_status == "SUCCESS":
+            # 已经确认登录成功，重新加载成绩页以防万一
+            await page.goto(target_grades_url, wait_until="domcontentloaded")
+        elif cas_status:
             await asyncio.sleep(1)
         
         if await is_login_form_visible(page, config):
