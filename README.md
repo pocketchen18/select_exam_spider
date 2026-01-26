@@ -84,12 +84,21 @@ uv pip install playwright
         "captcha_image": ".index-captcha-2FKeU img",
         "captcha_image_fallback": "div[class^='index-captcha-'] img",
         "captcha_refresh": ".index-codeMask-20jm4",
-        "switch_to_password": ".index-qr_btn-3JpGS.index-sj_btn-11Xsa"
+        "switch_to_password": ".index-qr_btn-3JpGS.index-sj_btn-11Xsa",
+        "switch_account_btn": "/html/body/div[1]/span/div[3]/div/div[1]/div/div[2]/div[6]/span"
     }
 }
 ```
 
-## 3. 运行脚本
+## 3. 核心功能特性
+
+- **多轮登录支持**：脚本支持检测并处理主页面及 iframe 嵌套内的多轮登录界面（最高 5 轮）。
+- **账号切换自动化**：针对部分需要点击“切换账号登录”才能显示表单的页面，可通过 `switch_account_btn` 的 XPath 路径实现自动点击。
+- **CAS 统一认证跳转**：自动检测 CAS 统一身份认证提示，执行授权跳转，并验证登录成功状态。
+- **验证码跨框架识别**：支持识别主页面及 iframe 内的验证码，具备自动刷新与重试机制。
+- **配置驱动**：所有核心选择器、URL 及 OCR 参数均可通过 `config.json` 或本地输入界面灵活配置。
+
+## 4. 运行脚本
 
 ```powershell
 .venv\Scripts\python.exe spider.py
@@ -99,13 +108,14 @@ uv pip install playwright
 
 ## 4. 功能逻辑
 
-1. **登录复用**：优先复用 `pw_profile` 登录态，若失效则等待用户手动完成登录（包括点击CAS统一认证按钮）后自动跳转成绩页。
-2. **自动查询**：定位并点击“查询”按钮。
-3. **成绩对比**：获取课程总评与分项明细，对比历史记录，发现变化即提醒。
-4. **即时提醒**：
+1. **自动登录与复用**：优先复用 `pw_profile` 登录态。若失效，脚本会自动尝试填写账号密码、识别验证码并处理 CAS 跳转；若遇到复杂校验（如滑块），则进入手动登录等待模式。
+2. **多层级界面适配**：支持 iframe 内嵌的登录表单，并能自动点击“切换账号登录”按钮以显示输入框。
+3. **自动查询**：定位并点击“查询”按钮，支持自定义查询页面 URL。
+4. **成绩对比**：获取课程总评与分项明细，对比历史记录，发现变化即提醒。
+5. **即时提醒**：
    - **桌面弹窗**：显示课程总评与分项成绩。
    - **邮件提醒**：发送详细成绩明细到指定邮箱。
-5. **定时任务**：脚本持续运行，每隔指定间隔检查一次。
+6. **定时任务**：脚本持续运行，每隔指定间隔检查一次。
 
 ## 5. 注意事项
 
