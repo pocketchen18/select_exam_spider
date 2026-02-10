@@ -155,5 +155,6 @@ cython_debug/
 config.json
 seen_courses.json
 pw_profile/
-last_check.png/
-user_secrets.json/
+last_check.png
+user_secrets.json
+spider_explanation.md
